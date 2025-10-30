@@ -56,11 +56,11 @@ spec:
         - name: KAFKA_PROCESS_ROLES
           value: "broker,controller"
         - name: KAFKA_CONTROLLER_QUORUM_VOTERS
-          value: "kafka-0@kafka-0.kafka.kafka-lab.svc.cluster.local:9093,kafka-1@kafka-1.kafka.kafka-lab.svc.cluster.local:9093,kafka-2@kafka-2.kafka.kafka-lab.svc.cluster.local:9093"
+          value: "0@kafka-0.kafka.kafka-lab.svc.cluster.local:9093,1@kafka-1.kafka.kafka-lab.svc.cluster.local:9093,2@kafka-2.kafka.kafka-lab.svc.cluster.local:9093"
         - name: KAFKA_LISTENERS
           value: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
         - name: KAFKA_ADVERTISED_LISTENERS
-          value: "PLAINTEXT://$(POD_NAME).kafka.kafka-lab.svc.cluster.local:9092"
+          value: "PLAINTEXT://$(HOSTNAME).kafka.kafka-lab.svc.cluster.local:9092"
         - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
           value: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
         - name: KAFKA_CONTROLLER_LISTENER_NAMES
@@ -79,10 +79,6 @@ spec:
           value: "1"
         - name: CLUSTER_ID
           value: "MkU3OEVBNTcwNTJENDM2Qk"
-        - name: POD_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.name
         command:
         - bash
         - -c
@@ -90,12 +86,15 @@ spec:
           # Extract node ID from pod name (kafka-0 -> 0, kafka-1 -> 1, etc)
           export KAFKA_NODE_ID=${HOSTNAME##*-}
           
+          # Set advertised listeners with actual hostname
+          export KAFKA_ADVERTISED_LISTENERS="PLAINTEXT://${HOSTNAME}.kafka.kafka-lab.svc.cluster.local:9092"
+          
           # Format the cluster.id properly for KRaft
           mkdir -p /var/lib/kafka/data
           
           # Only format if data directory is empty
           if [ ! -f /var/lib/kafka/data/meta.properties ]; then
-            echo "Formatting storage directory..."
+            echo "Formatting storage directory for node ${KAFKA_NODE_ID}..."
             kafka-storage format -t ${CLUSTER_ID} -c /etc/kafka/kafka.properties
           fi
           
