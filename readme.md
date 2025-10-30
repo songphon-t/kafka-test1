@@ -1,0 +1,3 @@
+this app for testing kafka cluster with simple producer and consumer apps
+security are not in concern here so best practice are not applied
+use with caustions

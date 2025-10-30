@@ -1,0 +1,245 @@
+---
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kafka-lab
+
+---
+# Kafka Headless Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: kafka-lab
+spec:
+  ports:
+  - port: 9092
+    name: client
+  - port: 9093
+    name: controller
+  clusterIP: None
+  selector:
+    app: kafka
+
+---
+# Kafka StatefulSet (KRaft mode)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  namespace: kafka-lab
+spec:
+  serviceName: kafka
+  replicas: 3
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      containers:
+      - name: kafka
+        image: confluentinc/cp-kafka:7.7.0
+        ports:
+        - containerPort: 9092
+          name: client
+        - containerPort: 9093
+          name: controller
+        env:
+        - name: KAFKA_NODE_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: KAFKA_PROCESS_ROLES
+          value: "broker,controller"
+        - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+          value: "kafka-0@kafka-0.kafka.kafka-lab.svc.cluster.local:9093,kafka-1@kafka-1.kafka.kafka-lab.svc.cluster.local:9093,kafka-2@kafka-2.kafka.kafka-lab.svc.cluster.local:9093"
+        - name: KAFKA_LISTENERS
+          value: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
+        - name: KAFKA_ADVERTISED_LISTENERS
+          value: "PLAINTEXT://$(POD_NAME).kafka.kafka-lab.svc.cluster.local:9092"
+        - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+          value: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
+        - name: KAFKA_CONTROLLER_LISTENER_NAMES
+          value: "CONTROLLER"
+        - name: KAFKA_INTER_BROKER_LISTENER_NAME
+          value: "PLAINTEXT"
+        - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+          value: "2"
+        - name: KAFKA_DEFAULT_REPLICATION_FACTOR
+          value: "2"
+        - name: KAFKA_MIN_INSYNC_REPLICAS
+          value: "1"
+        - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+          value: "2"
+        - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+          value: "1"
+        - name: CLUSTER_ID
+          value: "MkU3OEVBNTcwNTJENDM2Qk"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        command:
+        - bash
+        - -c
+        - |
+          # Extract node ID from pod name (kafka-0 -> 0, kafka-1 -> 1, etc)
+          export KAFKA_NODE_ID=${HOSTNAME##*-}
+          
+          # Format the cluster.id properly for KRaft
+          mkdir -p /var/lib/kafka/data
+          
+          # Only format if data directory is empty
+          if [ ! -f /var/lib/kafka/data/meta.properties ]; then
+            echo "Formatting storage directory..."
+            kafka-storage format -t ${CLUSTER_ID} -c /etc/kafka/kafka.properties
+          fi
+          
+          # Start Kafka
+          exec /etc/confluent/docker/run
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/kafka/data
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 1Gi
+
+---
+# Producer Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-producer
+  namespace: kafka-lab
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: kafka-producer
+  template:
+    metadata:
+      labels:
+        app: kafka-producer
+    spec:
+      containers:
+      - name: producer
+        image: kafka-test-app:latest
+        imagePullPolicy: Never
+        command: ["python", "producer.py"]
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka-0.kafka.kafka-lab.svc.cluster.local:9092,kafka-1.kafka.kafka-lab.svc.cluster.local:9092,kafka-2.kafka.kafka-lab.svc.cluster.local:9092"
+        - name: KAFKA_TOPIC
+          value: "test-topic"
+        - name: PRODUCE_INTERVAL
+          value: "2"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+
+---
+# Consumer Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-consumer
+  namespace: kafka-lab
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: kafka-consumer
+  template:
+    metadata:
+      labels:
+        app: kafka-consumer
+    spec:
+      containers:
+      - name: consumer
+        image: kafka-test-app:latest
+        imagePullPolicy: Never
+        command: ["python", "consumer.py"]
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka-0.kafka.kafka-lab.svc.cluster.local:9092,kafka-1.kafka.kafka-lab.svc.cluster.local:9092,kafka-2.kafka.kafka-lab.svc.cluster.local:9092"
+        - name: KAFKA_TOPIC
+          value: "test-topic"
+        - name: KAFKA_GROUP_ID
+          value: "test-consumer-group"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+
+---
+# PostgreSQL Service (Optional - for testing with persistence)
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: kafka-lab
+spec:
+  ports:
+  - port: 5432
+  selector:
+    app: postgres
+
+---
+# PostgreSQL Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: kafka-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_DB
+          value: kafkatest
+        - name: POSTGRES_USER
+          value: testuser
+        - name: POSTGRES_PASSWORD
+          value: testpass
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
